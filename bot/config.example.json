@@ -1,10 +1,14 @@
 {
   "host": "127.0.0.1",
-  "port": 25565,
+  "port": 25566,
   "username": "RodeoBot",
   "auth": "offline",
   "version": "1.20.6",
-  "direction": "east",
-  "walkSegment": 15,
+  "direction": "EAST",
+  "sprint": false,
+  "attackRange": 3.2,
+  "attackCooldownMs": 700,
+  "pluginStatusUrl": "http://127.0.0.1:18765/status",
+  "token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
   "reconnectSeconds": 10
 }

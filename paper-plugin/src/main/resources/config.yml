@@ -1,32 +1,36 @@
-# Uruchamiaj WYŁĄCZNIE na oddzielnym świecie/serwerze LIVE.
-world: tiktoklive
+# RodeoTikTokLive 1.1 - uzywaj wylacznie na OSOBNYM swiecie/serwerze LIVE.
+# Nazwa swiata jest taka sama jak level-name w server.properties.
+world: world
 bot-name: RodeoBot
 start-enabled: false
 bot:
-  max-health: 60.0            # 30 serc
-  damage-multiplier: 0.5     # 50% standardowych obrazen
+  auto-teleport-to-world: true
+  max-health: 60.0          # 30 serc
+  damage-multiplier: 0.5   # polowa obrazen
   regen-every-seconds: 4
   regen-health: 2.0
-  spawn-protection-seconds: 8
-  keep-inventory: true
-terrain:
+  equipment-enabled: true
+  sword-sharpness: 5
+lane:
   enabled: true
-  distance-behind: 24
-  path-sample-blocks: 5
-  trail-width: 7
-  max-blocks-per-tick: 80
-  # tylko bloki w obszarze od dna swiata do max Y, znikanie jest trwale
+  direction: EAST           # EAST, WEST, NORTH, SOUTH (tak samo w bot config)
+  width: 5                  # plaska droga - 5 blokow szerokosci
+  look-ahead: 18            # oczyszczanie PRZED botem
+  clear-height: 5          # bloki usuwane od 1 do 5 nad poziomem drogi
+  max-block-changes-per-tick: 160
 mobs:
   max-live-mobs: 30
   lifetime-seconds: 90
-  spawn-distance: 7
-  gift-types:
-    rose: {type: CREEPER, count: 1}
+  spawn-distance-ahead: 8
+  events:
+    rose: {type: ZOMBIE, count: 1}
     heart: {type: ZOMBIE, count: 3}
-    galaxy: {type: CREEPER, count: 10}
+    galaxy: {type: CREEPER, count: 5}
+    follow: {type: CREEPER, count: 1}
+    likes500: {type: ZOMBIE, count: 1}
+    share: {type: SKELETON, count: 1}
 bridge:
   enabled: true
-  # lokalny serwer HTTP - nie wystawiaj portu na Internet
   bind: 127.0.0.1
   port: 18765
   token: CHANGE_ME_TO_A_LONG_RANDOM_SECRET

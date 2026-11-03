@@ -1,11 +1,11 @@
 name: RodeoTikTokLive
-version: 1.0.0
+version: 1.1.0
 main: pl.rodeo.live.RodeoTikTokLive
 api-version: '1.20.6'
 author: Rodeo
 commands:
   rodeolive:
-    description: Kontrola transmisji i testy giftow
+    description: Start/stop, diagnostyka, testy eventow TikTok LIVE
     permission: rodeolive.admin
 permissions:
   rodeolive.admin:

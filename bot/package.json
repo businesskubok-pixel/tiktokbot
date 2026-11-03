@@ -1,1 +1,7 @@
-{"name":"rodeo-live-bot","version":"1.0.0","private":true,"scripts":{"start":"node index.js"},"dependencies":{"mineflayer":"^4.28.0","mineflayer-pathfinder":"^2.4.5"}}
+{
+  "name": "rodeolive-bot",
+  "version": "1.1.0",
+  "private": true,
+  "scripts": {"start":"node index.js"},
+  "dependencies": {"mineflayer":"^4.20.1"}
+}
