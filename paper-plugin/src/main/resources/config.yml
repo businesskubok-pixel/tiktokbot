@@ -1,0 +1,32 @@
+# Uruchamiaj WYŁĄCZNIE na oddzielnym świecie/serwerze LIVE.
+world: tiktoklive
+bot-name: RodeoBot
+start-enabled: false
+bot:
+  max-health: 60.0            # 30 serc
+  damage-multiplier: 0.5     # 50% standardowych obrazen
+  regen-every-seconds: 4
+  regen-health: 2.0
+  spawn-protection-seconds: 8
+  keep-inventory: true
+terrain:
+  enabled: true
+  distance-behind: 24
+  path-sample-blocks: 5
+  trail-width: 7
+  max-blocks-per-tick: 80
+  # tylko bloki w obszarze od dna swiata do max Y, znikanie jest trwale
+mobs:
+  max-live-mobs: 30
+  lifetime-seconds: 90
+  spawn-distance: 7
+  gift-types:
+    rose: {type: CREEPER, count: 1}
+    heart: {type: ZOMBIE, count: 3}
+    galaxy: {type: CREEPER, count: 10}
+bridge:
+  enabled: true
+  # lokalny serwer HTTP - nie wystawiaj portu na Internet
+  bind: 127.0.0.1
+  port: 18765
+  token: CHANGE_ME_TO_A_LONG_RANDOM_SECRET
