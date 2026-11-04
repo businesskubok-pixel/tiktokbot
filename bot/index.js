@@ -53,7 +53,7 @@ function connect() {
       if(started)logStatus('BŁĄD: '+err.message);
     }
   }
-  const hostileNames=new Set(['zombie','husk','drowned','skeleton','stray','bogged','wither_skeleton','creeper','spider','cave_spider','witch','pillager']);
+  const hostileNames=new Set(['zombie','husk','drowned','skeleton','stray','bogged','wither_skeleton','creeper','spider','cave_spider','witch','pillager','ravager','evoker','warden','vindicator','vex']);
   function isHostile(entity){
     if(!entity || !entity.position || !bot.entity || entity.id===bot.entity.id)return false;
     const name=String(entity.name || entity.displayName || '').toLowerCase().replace(/^minecraft:/,'').replace(/\s+/g,'_');
@@ -64,7 +64,7 @@ function connect() {
     if(!running){currentTargetId=null;stopMovement();return;}
     const now=Date.now(), pos=bot.entity.position;
     const hitRange=Math.max(2.5,Math.min(3.5,Number(cfg.attackRange ?? 3.2)));
-    const detectionRange=Math.max(5,Math.min(16,Number(cfg.detectionRange ?? 11)));
+    const detectionRange=Math.max(5,Math.min(20,Number(cfg.detectionRange ?? 15)));
     const [dx,dz]=directions[direction]||directions.EAST;
     // Never chase sideways or behind the bot; always resume walking on the fixed course.
     const candidates=Object.values(bot.entities).filter(e=>{
@@ -72,9 +72,10 @@ function connect() {
       const offX=e.position.x-pos.x,offZ=e.position.z-pos.z;
       const ahead=offX*dx+offZ*dz;
       const sideways=Math.abs(offX*dz-offZ*dx);
-      return ahead>=-0.8 && ahead<=detectionRange && sideways<=2.5;
+      return ahead>=-2.5 && ahead<=detectionRange && sideways<=3.0;
     }).sort((a,b)=>a.position.distanceTo(pos)-b.position.distanceTo(pos));
     const target=candidates[0];
+    if(target && now-lastTargetLog>4000){console.log('[BOT] Cel:',target.name,'odleglosc',target.position.distanceTo(pos).toFixed(1)); lastTargetLog=now;}
     bot.setControlState('sprint',false);
     bot.setControlState('jump',false);
     if(target && target.position.distanceTo(pos)<=hitRange){

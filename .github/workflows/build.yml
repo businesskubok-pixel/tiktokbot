@@ -20,6 +20,6 @@ jobs:
         run: gradle clean build --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: RodeoTikTokLive-1.2.8
+          name: RodeoTikTokLive-1.2.9
           path: paper-plugin/build/libs/*.jar
           if-no-files-found: error

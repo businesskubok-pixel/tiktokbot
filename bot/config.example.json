@@ -8,6 +8,7 @@
   "sprint": false,
   "walkDutyCycle": 1,
   "attackRange": 3.2,
+  "detectionRange": 15,
   "attackCooldownMs": 700,
   "pluginStatusUrl": "http://127.0.0.1:18765/status",
   "token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",

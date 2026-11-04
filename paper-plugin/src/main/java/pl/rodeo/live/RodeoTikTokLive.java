@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Rodeo TikTok LIVE 1.2.8. All Bukkit world/entity operations occur on the primary thread. */
+/** Rodeo TikTok LIVE 1.2.9. All Bukkit world/entity operations occur on the primary thread. */
 public final class RodeoTikTokLive extends JavaPlugin implements Listener, CommandExecutor {
     private boolean running;
     private Location roundStart;
@@ -37,6 +37,10 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     private final Deque<GiftOrder> giftQueue = new ArrayDeque<>();
     private record GiftOrder(EntityType type, String event, String nick, int remaining) {}
     private long lastLaneCorrection = 0;
+    // Prefetch only a small number of chunks along the lane; never generate chunks synchronously every tick.
+    private final Set<Long> prefetchingChunks = new HashSet<>();
+    private int lastPrefetchChunkX = Integer.MIN_VALUE;
+    private int lastPrefetchChunkZ = Integer.MIN_VALUE;
     private final Map<UUID,GameMode> cameraModes = new HashMap<>();
     private record Column(int x, int z, int floorY) {}
 
@@ -48,12 +52,12 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         startBridge();
         Bukkit.getScheduler().runTaskLater(this, this::removeOtherMobs, 30L);
         task = Bukkit.getScheduler().runTaskTimer(this, this::tick, 1L, 1L);
-        getLogger().info("RodeoTikTokLive 1.2.8. Komenda /rodeolive debug pokazuje swiat i nick bota.");
+        getLogger().info("RodeoTikTokLive 1.2.9. Komenda /rodeolive debug pokazuje swiat i nick bota.");
     }
     @Override public void onDisable() {
         if (task != null) task.cancel();
         if (server != null) server.stop(0);
-        pending.clear(); pendingKeys.clear(); giftMobs.clear(); giftQueue.clear(); cameraModes.clear();
+        pending.clear(); pendingKeys.clear(); prefetchingChunks.clear(); giftMobs.clear(); giftQueue.clear(); cameraModes.clear();
     }
     private World liveWorld() { return Bukkit.getWorld(getConfig().getString("world", "world")); }
     private String botName() { return getConfig().getString("bot-name", "RodeoBot"); }
@@ -210,6 +214,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         }
         if(!getConfig().getBoolean("lane.enabled",true) || roundStart==null)return;
         correctBotLane(p);
+        if(Bukkit.getCurrentTick()%20==0) prefetchLane(p);
         queueLaneAhead(p);
         int budget=Math.max(1,Math.min(500,getConfig().getInt("lane.max-block-changes-per-tick",160)));
         int changes=0;
@@ -219,6 +224,27 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             changes+=prepareColumn(p.getWorld(),c,budget-changes);
         }
         // Keep pace controlled to avoid queues growing without bound.
+    }
+    // Paper 1.20.6 loads/generates chunks asynchronously. The bot's corridor is prepared
+    // after loading; ungenerated terrain will not silently block the lane forever.
+    private void prefetchLane(Player p) {
+        World w=p.getWorld(); int dx=dirX(),dz=dirZ(); if(dx==0&&dz==0)return;
+        int distance=Math.max(24,Math.min(96,getConfig().getInt("lane.chunk-prefetch-blocks",56)));
+        int originX=p.getLocation().getBlockX(),originZ=p.getLocation().getBlockZ();
+        // At most two outstanding requests per second, and never more than four in flight.
+        int requested=0;
+        for(int ahead=16;ahead<=distance;ahead+=16){
+            if(requested>=2||prefetchingChunks.size()>=4)break;
+            int cx=(originX+ahead*dx)>>4,cz=(originZ+ahead*dz)>>4;
+            if(w.isChunkLoaded(cx,cz))continue;
+            long key=colKey(cx,cz);
+            if(!prefetchingChunks.add(key))continue;
+            requested++;
+            w.getChunkAtAsync(cx,cz,true).whenComplete((chunk,err)->{
+                prefetchingChunks.remove(key);
+                if(err!=null)getLogger().warning("Nie udalo sie wczytac chunka LIVE " + cx + "," + cz + ": " + err.getMessage());
+            });
+        }
     }
     private void queueLaneAhead(Player p) {
         int dx=dirX(),dz=dirZ(); if(dx==0&&dz==0)return;

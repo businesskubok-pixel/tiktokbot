@@ -18,7 +18,8 @@ lane:
   enabled: true
   direction: EAST           # EAST, WEST, NORTH, SOUTH (tak samo w bot config)
   width: 5                  # plaska droga - 5 blokow szerokosci
-  look-ahead: 18            # oczyszczanie PRZED botem
+  look-ahead: 24
+  chunk-prefetch-blocks: 56            # oczyszczanie PRZED botem
   clear-height: 5          # bloki usuwane od 1 do 5 nad poziomem drogi
   max-block-changes-per-tick: 160
   recenter-bot: true       # powrot na os drogi po odrzuceniu przez eksplozje
