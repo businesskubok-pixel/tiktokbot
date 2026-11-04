@@ -27,6 +27,11 @@ lane:
 camera:
   distance: 5.5             # bloki za botem
   height: 2.4               # bloki ponad stopami bota
+  smooth-follow: true       # plynne sledzenie (bez teleportu co 2 ticki)
+  smoothing: 0.30           # reakcja kamery: 0.05 - 0.8
+  max-speed-per-tick: 0.65  # ograniczenie predkosci korekty
+  max-distance-error: 5.0  # teleport tylko po duzym odchyleniu
+  correction-interval-ticks: 20
 mobs:
   only-gift-mobs: true
   remove-existing-mobs: true

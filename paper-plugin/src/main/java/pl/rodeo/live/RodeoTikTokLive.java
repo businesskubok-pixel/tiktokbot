@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Rodeo TikTok LIVE 1.3.1. All Bukkit world/entity operations occur on the primary thread. */
+/** Rodeo TikTok LIVE 1.3.2. All Bukkit world/entity operations occur on the primary thread. */
 public final class RodeoTikTokLive extends JavaPlugin implements Listener, CommandExecutor {
     private boolean running;
     private Location roundStart;
@@ -45,7 +45,17 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     private int lastPrefetchChunkX = Integer.MIN_VALUE;
     private int lastPrefetchChunkZ = Integer.MIN_VALUE;
     private final Map<UUID, CameraSession> cameras = new HashMap<>();
-    private record CameraSession(GameMode previousMode, Location previousLocation) {}
+    private static final class CameraSession {
+        final GameMode previousMode;
+        final Location previousLocation;
+        long lastCorrectionTick;
+        CameraSession(GameMode mode, Location pos) {
+            previousMode = mode; previousLocation = pos;
+            lastCorrectionTick = Bukkit.getCurrentTick();
+        }
+        GameMode previousMode() { return previousMode; }
+        Location previousLocation() { return previousLocation; }
+    }
     private record Column(int x, int z, int floorY) {}
 
     @Override public void onEnable() {
@@ -56,7 +66,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         startBridge();
         Bukkit.getScheduler().runTaskLater(this, this::removeOtherMobs, 30L);
         task = Bukkit.getScheduler().runTaskTimer(this, this::tick, 1L, 1L);
-        getLogger().info("RodeoTikTokLive 1.3.1. Komenda /rodeolive debug pokazuje swiat i nick bota.");
+        getLogger().info("RodeoTikTokLive 1.3.2. Komenda /rodeolive debug pokazuje swiat i nick bota.");
     }
     @Override public void onDisable() {
         if (task != null) task.cancel();
@@ -173,6 +183,17 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         viewer.teleport(cameraLocation(target));
         viewer.sendMessage(ChatColor.GREEN + "Kamera zza bota aktywna! /rodeolive uncamera - powrot.");
     }
+    // Smooth spectator follow. The client receives velocity updates instead of
+    // repeated teleport packets. Teleport is reserved for large desyncs only.
+    // IMPORTANT: spectator movement can vary with the client; the fallback
+    // correction is intentionally throttled to avoid the 1.3.1 camera jitter.
+    private static float blendAngle(float current, float target, double factor) {
+        float delta = (target - current) % 360f;
+        if (delta > 180f) delta -= 360f;
+        if (delta < -180f) delta += 360f;
+        return current + (float)(delta * factor);
+    }
+
     private void updateCameras() {
         if (cameras.isEmpty()) return;
         Player target = bot();
@@ -184,25 +205,58 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             }
             return;
         }
-        // Every two ticks keeps the view close to the bot without commanding
-        // unnecessary network teleports on each server tick.
-        if (Bukkit.getCurrentTick() % 2 != 0) return;
+
         Location desired = cameraLocation(target);
-        // Never teleport into an unloaded chunk. The bot's chunk will normally
-        // be loaded, but on a cross-chunk transition skip until it is ready.
-        if (!desired.getWorld().isChunkLoaded(desired.getBlockX() >> 4, desired.getBlockZ() >> 4)) return;
+        World world = desired.getWorld();
+        if (world == null || !world.isChunkLoaded(desired.getBlockX() >> 4, desired.getBlockZ() >> 4)) return;
+
+        boolean smoothFollow = getConfig().getBoolean("camera.smooth-follow", true);
+        double smoothing = Math.max(0.05, Math.min(0.8, getConfig().getDouble("camera.smoothing", 0.30)));
+        double maxSpeed = Math.max(0.10, Math.min(1.5, getConfig().getDouble("camera.max-speed-per-tick", 0.65)));
+        double maxError = Math.max(2.0, Math.min(20.0, getConfig().getDouble("camera.max-distance-error", 5.0)));
+        int correctionTicks = Math.max(10, Math.min(100, getConfig().getInt("camera.correction-interval-ticks", 20)));
+        long tick = Bukkit.getCurrentTick();
+
         for (UUID id : new ArrayList<>(cameras.keySet())) {
             Player viewer = Bukkit.getPlayer(id);
             if (viewer == null || !viewer.isOnline()) { cameras.remove(id); continue; }
             if (viewer.getGameMode() != GameMode.SPECTATOR) { stopCamera(viewer, false); continue; }
-            // Moving the real spectator means chunks are streamed relative to the
-            // current camera location rather than a stationary spectator body.
-            viewer.teleport(desired);
+            Location current = viewer.getLocation();
+            if (!smoothFollow) {
+                if (tick % 2 == 0) viewer.teleport(desired);
+                continue;
+            }
+            if (!current.getWorld().equals(world)) {
+                viewer.teleport(desired);
+                continue;
+            }
+
+            org.bukkit.util.Vector error = desired.toVector().subtract(current.toVector());
+            double distanceSquared = error.lengthSquared();
+            CameraSession session = cameras.get(id);
+            if (session == null) continue;
+
+            // Large drift (e.g. after bot respawn): occasional hard recovery.
+            // This also prevents leaving the camera far from the chunk window.
+            if (distanceSquared > maxError * maxError && tick - session.lastCorrectionTick >= correctionTicks) {
+                if (viewer.teleport(desired)) session.lastCorrectionTick = tick;
+                continue;
+            }
+
+            org.bukkit.util.Vector velocity = error.multiply(smoothing);
+            if (velocity.lengthSquared() > maxSpeed * maxSpeed) velocity.normalize().multiply(maxSpeed);
+            if (distanceSquared < 0.025) velocity.zero();
+            viewer.setVelocity(velocity);
+
+            float yaw = blendAngle(current.getYaw(), desired.getYaw(), Math.min(0.65, smoothing * 1.5));
+            float pitch = blendAngle(current.getPitch(), desired.getPitch(), Math.min(0.65, smoothing * 1.5));
+            viewer.setRotation(yaw, pitch);
         }
     }
     private void stopCamera(Player viewer, boolean notify) {
         CameraSession session = cameras.remove(viewer.getUniqueId());
         if (session == null) { if(notify) viewer.sendMessage("Kamera nie jest aktywna."); return; }
+        viewer.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
         viewer.setGameMode(session.previousMode());
         if (session.previousLocation().getWorld() != null) viewer.teleport(session.previousLocation());
         if (notify) viewer.sendMessage(ChatColor.GREEN + "Widok kamery zakonczony. Wrociles do swojej postaci.");

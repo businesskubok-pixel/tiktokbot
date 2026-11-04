@@ -1,41 +1,45 @@
-# RodeoTikTokLive 1.3.1 — kamera zza bota + wczytywanie swiata + droga 7 blokow
+# RodeoTikTokLive 1.3.2 — płynniejsza kamera zza bota
 
-Aktualizacja bazuje na projekcie 1.2.9 / 1.3.0. Zachowuje Mineflayer, TikFinity bridge, gifty, limit 30 mobow i kolejke 150.
+Aktualizacja **1.3.1 → 1.3.2**, wyłącznie mechanizm kamery. Wszystkie dotychczasowe funkcje bota i TikFinity (gifty, moby, 30 aktywnych, kolejka 150), droga o szerokości 7 bloków oraz prefetch chunków pozostały bez zmian.
 
-## Najwazniejsza poprawka kamery
-Poprzednia kamera obserwowala niewidzialny ArmorStand, ktory podazal za botem. To moglo prowadzic do problemow z wysylaniem chunkow do klienta obserwatora, gdy jego rzeczywista pozycja nie nadazala za kamera.
+## Co zmieniono
 
-Teraz `/rodeolive camera` przestawia konto obserwatora w SPECTATOR i teleportuje jego **rzeczywista pozycje** co 2 ticki, kilka blokow za botem. Widac model postaci, zbroje, trzymany miecz i animacje wynikajace z gry. Kamera patrzy w kierunku bota. Minecraft powinien wysylac chunki wzgledem faktycznej pozycji widza. `/rodeolive uncamera` przywraca poprzednia pozycje i tryb.
+- Kamera aktualizuje położenie poprzez ograniczoną prędkość (`Player#setVelocity`) na każdym ticku, zamiast teleportować obserwatora co 2 ticki.
+- Kamera łagodnie kieruje wzrok na RodeoBota (`Player#setRotation`).
+- Teleport awaryjny jest wykonywany tylko po przekroczeniu maksymalnego błędu odległości i z minimalnym odstępem między korektami.
+- Rzeczywista pozycja gracza-obserwatora nadal przemieszcza się, więc serwer ma szansę wysyłać chunki względem właściwego gracza.
+- `camera.smooth-follow: false` pozwala tymczasowo wrócić do wcześniejszego sposobu kamery w celu diagnostyki.
 
-## Droga
-Szerokosc `lane.width: 7` (3 bloki + srodek + 3). Asynchroniczne wczytywanie chunkow i ograniczone bilety pluginowe (*chunk tickets*) przed botem `lane.chunk-prefetch-blocks: 56`, `lane.look-ahead: 24`. Bilety sa usuwane po przejsciu bota dalej oraz przy wylaczeniu pluginu.
+**Ograniczenie:** sterowanie prędkością w trybie spectator zależy również od zachowania klienta. Ta poprawka nie jest jeszcze przetestowana na działającym serwerze i nie gwarantuje całkowicie płynnego obrazu. Teleport awaryjny może być zauważalny; prawdziwie interpolowana kamera klientowa wymaga moda lub dedykowanego klienta.
 
 ## Instalacja
-1. Zrob kopie swiata LIVE i `plugins/RodeoTikTokLive/config.yml`, bo plugin trwale zmienia teren.
-2. Przez GitHub Desktop nadpisz caly kod projektu z tej paczki (ale NIE kopiuj prywatnych `config.json`). Commit + Push; GitHub Actions powinien zbudowac JAR.
-3. Zatrzymaj Paper, wyjmij stary JAR z folderu `plugins` i wstaw nowy 1.3.1; zostaw tylko jeden JAR RodeoTikTokLive.
-4. Zachowaj istniejacy `plugins/RodeoTikTokLive/config.yml`, token i port API 18765. W jego **istniejacej** sekcji `lane` ustaw `width: 7`, `look-ahead: 24`, `chunk-prefetch-blocks: 56`. Dopisz sekcje `camera` jak ponizej, jesli jej nie ma.
-5. Zachowaj dotychczasowe `bot/config.json` i `bridge/config.json`: NIE zmieniaj tokenow, portu Minecraft 25565 ani mapowania giftow. Kod bota i bridge pozostaje zgodny.
-6. Uruchom Paper, `npm start` w bot i bridge, a na serwerze `/rodeolive start`. Wejdz na konto obserwatora i wpisz `/rodeolive camera`. Wyjscie: `/rodeolive uncamera`.
+
+1. Zrób kopię zapasową świata LIVE i `plugins/RodeoTikTokLive/config.yml` (plugin modyfikuje teren).
+2. Skopiuj źródła `paper-plugin` do swojego repozytorium przez GitHub Desktop, kliknij **Commit to main** i **Push origin**.
+3. W GitHub Actions skompiluj JAR. Nie instaluj, jeśli kompilacja zakończy się błędem.
+4. Zatrzymaj Paper, przenieś stary JAR poza `plugins` i wgraj nowy; zostaw tylko jeden JAR RodeoTikTokLive.
+5. Zachowaj istniejący `plugins/RodeoTikTokLive/config.yml`. Dodaj **wewnątrz istniejącej sekcji `camera:`** poniższe ustawienia; nie dodawaj drugiego `camera:`.
 
 ```yaml
-lane:
-  width: 7
-  look-ahead: 24
-  chunk-prefetch-blocks: 56
 camera:
   distance: 5.5
   height: 2.4
+  smooth-follow: true
+  smoothing: 0.30
+  max-speed-per-tick: 0.65
+  max-distance-error: 5.0
+  correction-interval-ticks: 20
 ```
 
-Uwaga: fragment `lane` ma zostac **scalony** z istniejaca sekcja `lane`, nie wklejony jako druga sekcja.
+6. Uruchom Paper i sprawdź `version RodeoTikTokLive` (1.3.2).
+7. Pozostaw dotychczasowy `bot/index.js`, `bot/config.json`, `bridge/index.js` i `bridge/config.json` bez zmian; uruchom je jak wcześniej.
+8. W konsoli serwera wpisz `rodeolive start`, a w grze `/rodeolive camera`. Testuj przez kilka minut; wyjście `/rodeolive uncamera`.
 
-## Test
-- `/version RodeoTikTokLive` -> 1.3.1
-- `/rodeolive start` oraz `/rodeolive camera`
-- Pozostaw kamere na 2-3 minuty: sprawdz, czy nowe chunki przed botem stale sie pojawiaja
-- `/rodeolive test corgi Test123`: czy kamera widzi miecz bota i ruch podczas walki
-- `/rodeolive uncamera`: powrot na stare miejsce
+## Regulacja
 
-## Ograniczenia
-Ta kamera jest trzecioosobowa: nie wyswietla miecza jako pierwszoosobowej dloni. Teleportacja obserwatora co 2 ticki moze powodowac drganie obrazu; plynne renderowanie zalezy od klienta Minecraft i parametrow serwera. Wczytywanie chunkow ma nadal limity bezpieczenstwa. Kod wymaga kompilacji przez GitHub Actions i testu na prawdziwym serwerze.
+- Gdy kamera zostaje zbyt daleko: `smoothing: 0.40`, `max-speed-per-tick: 0.80`.
+- Gdy kamera nerwowo reaguje na ruch: `smoothing: 0.20`.
+- Gdy kamera skacze przy korekcie: `max-distance-error: 7.0` (wyłącznie na testowym świecie, bo opóźnia powrót).
+- Jeśli poruszanie się przez velocity w spectator nie działa prawidłowo, `smooth-follow: false` przywraca wcześniejszy sposób obserwacji, ale także wcześniejsze szarpanie.
+
+Po zmianach konfiguracji najlepiej wykonać pełny restart Paper. **Nie zmieniaj** portów Minecraft 25565 i API 18765, tokenów ani mapowania giftów. Nie przesyłaj prywatnych plików `config.json` na GitHub.
