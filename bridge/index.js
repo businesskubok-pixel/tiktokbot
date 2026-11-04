@@ -30,8 +30,12 @@ function connect(){
     const user=nick(d), event=String(msg.event||'').toLowerCase();
     if(event==='gift'){
       if(d.giftType===1 && d.repeatEnd===false)return;
-      const eventType=cfg.giftNames?.[d.giftName] || cfg.giftNames?.[String(d.giftName||'').toLowerCase()];
+      // Obsluguje stare wartosci "rose" oraz nowe obiekty {event,label,coinsLabel}.
+      const match=cfg.giftNames?.[d.giftName] || cfg.giftNames?.[String(d.giftName||'').toLowerCase()];
+      if(!match){console.log('[GIFT] Nieznany prezent:',d.giftName,'- dodaj do config.json');return;}
+      const eventType=typeof match==='string' ? match : match.event;
       if(!eventType)return;
+      if(typeof match==='object')console.log('[GIFT]',d.giftName,'->',match.label||eventType,'| cena:',match.coinsLabel||'nie podano');
       const id=String(d.msgId||d.messageId||'');
       if(seen('gift:'+id))return;
       // One named mob batch per final gift event; no repeatCount multiplier.

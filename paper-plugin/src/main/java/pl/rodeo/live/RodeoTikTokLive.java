@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Rodeo TikTok LIVE 1.1.0. All Bukkit world/entity operations occur on the primary thread. */
+/** Rodeo TikTok LIVE 1.2. All Bukkit world/entity operations occur on the primary thread. */
 public final class RodeoTikTokLive extends JavaPlugin implements Listener, CommandExecutor {
     private boolean running;
     private Location roundStart;
@@ -32,7 +32,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     private final Deque<Column> pending = new ArrayDeque<>();
     private final Set<Long> pendingKeys = new HashSet<>();
     private final Set<UUID> giftMobs = new HashSet<>();
-    private final Random random = new Random();
+    private final Map<UUID,GameMode> cameraModes = new HashMap<>();
     private record Column(int x, int z, int floorY) {}
 
     @Override public void onEnable() {
@@ -42,12 +42,12 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         running = getConfig().getBoolean("start-enabled", false);
         startBridge();
         task = Bukkit.getScheduler().runTaskTimer(this, this::tick, 1L, 1L);
-        getLogger().info("RodeoTikTokLive 1.1.0. Komenda /rodeolive debug pokazuje swiat i nick bota.");
+        getLogger().info("RodeoTikTokLive 1.2. Komenda /rodeolive debug pokazuje swiat i nick bota.");
     }
     @Override public void onDisable() {
         if (task != null) task.cancel();
         if (server != null) server.stop(0);
-        pending.clear(); pendingKeys.clear(); giftMobs.clear();
+        pending.clear(); pendingKeys.clear(); giftMobs.clear(); cameraModes.clear();
     }
     private World liveWorld() { return Bukkit.getWorld(getConfig().getString("world", "world")); }
     private String botName() { return getConfig().getString("bot-name", "RodeoBot"); }
@@ -89,6 +89,9 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         if (attr!=null) attr.setBaseValue(max);
         p.setHealth(Math.min(max,p.getHealth()<=0?max:p.getHealth()));
         p.setFoodLevel(20);p.setSaturation(20);
+        // Vanilla player walk speed is 0.2; lower it for a relaxed LIVE pace.
+        float walkSpeed=(float)Math.max(0.04,Math.min(0.2,getConfig().getDouble("bot.walk-speed",0.12)));
+        p.setWalkSpeed(walkSpeed);
         equip(p);
     }
     @EventHandler public void onJoin(PlayerJoinEvent e) {
@@ -121,6 +124,28 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             clearPending();
         },5L);
     }
+    // Obserwator moze widziec kamere bota; zwykly spectator nie renderuje jego dloni/miecza.
+    private void camera(Player viewer) {
+        Player target=bot();
+        if(!valid(target)){viewer.sendMessage(ChatColor.RED+"RodeoBot nie jest online w swiecie LIVE.");return;}
+        if(viewer.equals(target)){viewer.sendMessage("Nie mozna obserwowac samego siebie.");return;}
+        cameraModes.putIfAbsent(viewer.getUniqueId(),viewer.getGameMode());
+        viewer.setGameMode(GameMode.SPECTATOR);
+        viewer.teleport(target.getLocation());
+        Bukkit.getScheduler().runTaskLater(this,()->{
+            if(viewer.isOnline()&&valid(target)&&viewer.getGameMode()==GameMode.SPECTATOR){
+                viewer.setSpectatorTarget(target);
+                viewer.sendMessage(ChatColor.GREEN+"Kamera bota aktywna. /rodeolive uncamera przywraca widok.");
+            }
+        },2L);
+    }
+    private void uncamera(Player viewer) {
+        if(viewer.getGameMode()==GameMode.SPECTATOR) viewer.setSpectatorTarget(null);
+        GameMode previous=cameraModes.remove(viewer.getUniqueId());
+        if(previous!=null)viewer.setGameMode(previous);
+        viewer.sendMessage("Widok kamery zakonczony.");
+    }
+    @EventHandler public void onQuit(PlayerQuitEvent e){cameraModes.remove(e.getPlayer().getUniqueId());}
     private void tick() {
         Player p=bot();if(!running||!valid(p)||p.isDead())return;
         if(p.getTicksLived()% (20*Math.max(1,getConfig().getInt("bot.regen-every-seconds",4)))==0){
@@ -177,36 +202,59 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         // Some trees / tall structures would remain above clear-height: intentional bounded clearing.
         return removed;
     }
-    private void spawnGift(String event,String username) {
-        Player p=bot();if(!running||!valid(p)||p.isDead())return;
+    /** Spawn gift mobs onto a safe short platform ahead of the bot; return actual count. */
+    private int spawnGift(String event,String username) {
+        Player p=bot();
+        if(!running||!valid(p)||p.isDead())return 0;
         String key="mobs.events."+event.toLowerCase(Locale.ROOT)+".";
         String raw=getConfig().getString(key+"type","");
-        EntityType type;try{type=EntityType.valueOf(raw.toUpperCase(Locale.ROOT));}catch(Exception ex){return;}
-        if(!type.isAlive()||!type.isSpawnable())return;
+        EntityType type;
+        try {type=EntityType.valueOf(raw.toUpperCase(Locale.ROOT));}
+        catch(Exception ex){getLogger().warning("Nieznane zdarzenie/mob: "+event);return 0;}
+        if(!type.isAlive()||!type.isSpawnable())return 0;
         giftMobs.removeIf(id->Bukkit.getEntity(id)==null);
         int limit=Math.max(1,getConfig().getInt("mobs.max-live-mobs",30));
         int count=Math.max(1,Math.min(10,getConfig().getInt(key+"count",1)));
-        String nick=username.replaceAll("[\\p{Cntrl}§]", "").trim();if(nick.isEmpty())nick="Widz";
+        String nick=username.replaceAll("[\\p{Cntrl}§]", "").trim();
+        if(nick.isEmpty())nick="Widz";
         if(nick.length()>22)nick=nick.substring(0,22);
         int dx=dirX(),dz=dirZ();
         int ahead=Math.max(3,Math.min(15,getConfig().getInt("mobs.spawn-distance-ahead",8)));
+        int spawned=0;
+        int floorY=(roundStart!=null?roundStart.getBlockY()-1:p.getLocation().getBlockY()-1);
+        World w=p.getWorld();
         for(int i=0;i<count && giftMobs.size()<limit;i++) {
-            Location loc=p.getLocation().clone();
-            loc.add(dx*(ahead+i%3),0,dz*(ahead+i%3));
-            loc.add((dz!=0?1:0)*random.nextInt(3)- (dz!=0?1:0),0,(dx!=0?1:0)*random.nextInt(3)-(dx!=0?1:0));
-            // The flat lane is located at roundStart floor; use the same Y for mob placement.
-            if(roundStart!=null)loc.setY(roundStart.getY());
-            int chunkX=loc.getBlockX()>>4,chunkZ=loc.getBlockZ()>>4;
-            if(!loc.getWorld().isChunkLoaded(chunkX,chunkZ))continue;
-            if(!loc.getBlock().getType().isAir() || !loc.clone().add(0,-1,0).getBlock().getType().isSolid())continue;
-            Entity mob;try{mob=loc.getWorld().spawnEntity(loc,type);}catch(Exception ex){continue;}
+            // Keep the mobs in the same corridor as the bot and away from its current block.
+            int distance=ahead+(i%3);
+            int lateral=(i%3)-1;
+            int x=p.getLocation().getBlockX()+dx*distance+(dz!=0?lateral:0);
+            int z=p.getLocation().getBlockZ()+dz*distance+(dx!=0?lateral:0);
+            if(!w.isChunkLoaded(x>>4,z>>4))continue;
+            if(floorY<=w.getMinHeight()||floorY+3>=w.getMaxHeight())continue;
+            // The corridor may not have been prepared yet: prepare this small area now.
+            for(int xx=x-1;xx<=x+1;xx++)for(int zz=z-1;zz<=z+1;zz++){
+                if(!w.isChunkLoaded(xx>>4,zz>>4))continue;
+                Block floor=w.getBlockAt(xx,floorY,zz);
+                if(!floor.getType().isSolid())floor.setType(Material.GRASS_BLOCK,false);
+                for(int yy=floorY+1;yy<=floorY+3;yy++){
+                    Block b=w.getBlockAt(xx,yy,zz);
+                    if(!b.getType().isAir())b.setType(Material.AIR,false);
+                }
+            }
+            Location loc=new Location(w,x+0.5,floorY+1,z+0.5);
+            Entity mob;
+            try {mob=w.spawnEntity(loc,type);}
+            catch(Exception ex){getLogger().warning("Nie mozna przywolac "+type+": "+ex.getMessage());continue;}
             mob.setCustomName(ChatColor.YELLOW+nick+ChatColor.RED+" | "+event);
             mob.setCustomNameVisible(true);
             if(mob instanceof Mob attacker)attacker.setTarget(p);
-            UUID id=mob.getUniqueId();giftMobs.add(id);
-            Bukkit.getScheduler().runTaskLater(this,()->{Entity e=Bukkit.getEntity(id);if(e!=null)e.remove();giftMobs.remove(id);},
-                 Math.max(10,getConfig().getInt("mobs.lifetime-seconds",90))*20L);
+            UUID id=mob.getUniqueId();giftMobs.add(id);spawned++;
+            Bukkit.getScheduler().runTaskLater(this,()->{
+                Entity e=Bukkit.getEntity(id);if(e!=null)e.remove();giftMobs.remove(id);
+            },Math.max(10,getConfig().getInt("mobs.lifetime-seconds",90))*20L);
         }
+        getLogger().info("LIVE event="+event+" nick="+nick+" mobs="+spawned+"/"+count);
+        return spawned;
     }
     private void send(HttpExchange ex,int status,String message)throws IOException {
         byte[] bytes=message.getBytes(StandardCharsets.UTF_8);
@@ -244,7 +292,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender,Command cmd,String label,String[] args) {
         if(!sender.hasPermission("rodeolive.admin"))return true;
-        if(args.length==0){sender.sendMessage("/rodeolive start | stop | reset | test <rose|follow|likes500> <nick> | stats | debug | reload");return true;}
+        if(args.length==0){sender.sendMessage("/rodeolive start | stop | reset | camera | uncamera | gifts | test <event> <nick> | stats | debug | reload");return true;}
         switch(args[0].toLowerCase(Locale.ROOT)) {
             case "start" -> {
                 Player p=bot();World world=liveWorld();
@@ -267,8 +315,26 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             }
             case "test" -> {
                 if(args.length<3){sender.sendMessage("/rodeolive test rose Nick");break;}
-                spawnGift(args[1],String.join(" ",Arrays.copyOfRange(args,2,args.length)));
-                sender.sendMessage("Zdarzenie testowe: "+args[1]+" / "+args[2]);
+                int n=spawnGift(args[1],String.join(" ",Arrays.copyOfRange(args,2,args.length)));
+                sender.sendMessage("Test "+args[1]+": przywolano "+n+" mobow. Sprawdz /rodeolive stats.");
+                if(n==0) sender.sendMessage("Sprawdz LIVE start, limit mobow oraz nazwe zdarzenia w config.yml.");
+            }
+            case "camera" -> {
+                if(!(sender instanceof Player viewer)){sender.sendMessage("Komenda /rodeolive camera tylko w grze.");break;}
+                camera(viewer);
+            }
+            case "uncamera" -> {
+                if(!(sender instanceof Player viewer)){sender.sendMessage("Komenda /rodeolive uncamera tylko w grze.");break;}
+                uncamera(viewer);
+            }
+            case "gifts" -> {
+                var section=getConfig().getConfigurationSection("mobs.events");
+                if(section==null){sender.sendMessage("Brak mobs.events w config.yml");break;}
+                sender.sendMessage(ChatColor.GOLD+"Zdarzenia LIVE (opis/cena to etykiety, nie oficjalne ceny TikTok):");
+                for(String id:section.getKeys(false)) {
+                    String key="mobs.events."+id+".";
+                    sender.sendMessage(ChatColor.YELLOW+id+ChatColor.WHITE+" -> "+getConfig().getString(key+"type","?")+" x"+getConfig().getInt(key+"count",1)+" | "+getConfig().getString(key+"description",id));
+                }
             }
             case "stats" -> sender.sendMessage("LIVE="+running+", bot="+(valid(bot())?"online":"offline/wrong-world")+", deaths="+deaths+", mobs="+giftMobs.size()+", lane queue="+pending.size());
             case "debug" -> {
@@ -277,7 +343,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
                 sender.sendMessage("Swiaty: "+String.join(", ",Bukkit.getWorlds().stream().map(World::getName).toList()));
             }
             case "reload" -> {
-                reloadConfig();if(server!=null){server.stop(0);server=null;}startBridge();clearPending();sender.sendMessage("Config przeladowany.");
+                reloadConfig();Player activeBot=bot();if(valid(activeBot))strengthen(activeBot);if(server!=null){server.stop(0);server=null;}startBridge();clearPending();sender.sendMessage("Config przeladowany.");
             }
             default -> sender.sendMessage("Nieznana komenda. /rodeolive");
         }

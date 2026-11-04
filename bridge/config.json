@@ -1,0 +1,37 @@
+{
+  "tikfinityWebSocket": "ws://127.0.0.1:21213/",
+  "pluginHttp": "http://127.0.0.1:18765/gift",
+  "token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
+  "giftNames": {
+    "Rose": "rose",
+    "Heart": "heart",
+    "Galaxy": "galaxy",
+    "Finger Heart": {
+      "event": "fingerheart",
+      "label": "2 Zombie",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Corgi": {
+      "event": "corgi",
+      "label": "2 Creepery",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Perfume": {
+      "event": "perfume",
+      "label": "3 Szkielety",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Doughnut": {
+      "event": "doughnut",
+      "label": "4 Pajaki",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Lion": {
+      "event": "lion",
+      "label": "8 Zombie",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    }
+  },
+  "likesPerZombie": 500,
+  "maxEventsPerSecond": 10
+}

@@ -1,10 +1,11 @@
-# RodeoTikTokLive 1.1 - uzywaj wylacznie na OSOBNYM swiecie/serwerze LIVE.
+# RodeoTikTokLive 1.2 - uzywaj wylacznie na OSOBNYM swiecie/serwerze LIVE.
 # Nazwa swiata jest taka sama jak level-name w server.properties.
 world: world
 bot-name: RodeoBot
 start-enabled: false
 bot:
   auto-teleport-to-world: true
+  walk-speed: 0.10          # 0.2 = zwykly spacer Minecraft; 0.12 = spokojniejszy marsz
   max-health: 60.0          # 30 serc
   damage-multiplier: 0.5   # polowa obrazen
   regen-every-seconds: 4
@@ -28,7 +29,13 @@ mobs:
     galaxy: {type: CREEPER, count: 5}
     follow: {type: CREEPER, count: 1}
     likes500: {type: ZOMBIE, count: 1}
-    share: {type: SKELETON, count: 1}
+    share: {type: SKELETON, count: 1, description: "Udostepnienie -> Szkielet"}
+    # Piec DODATKOWYCH, dowolnie zmienialnych giftow:
+    fingerheart: {type: ZOMBIE, count: 2, description: "Finger Heart -> 2 Zombie"}
+    corgi: {type: CREEPER, count: 2, description: "Corgi -> 2 Creepery"}
+    perfume: {type: SKELETON, count: 3, description: "Perfume -> 3 Szkielety"}
+    doughnut: {type: SPIDER, count: 4, description: "Doughnut -> 4 Pajaki"}
+    lion: {type: ZOMBIE, count: 8, description: "Lion -> 8 Zombie"}
 bridge:
   enabled: true
   bind: 127.0.0.1

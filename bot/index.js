@@ -35,8 +35,11 @@ function connect() {
     // Heading Minecraft: 0 -> south; -PI/2 -> east.
     const yaw=Math.atan2(-dx,dz);
     bot.look(yaw,0,true).catch(()=>{});
-    bot.setControlState('forward',true);
-    bot.setControlState('sprint',Boolean(cfg.sprint));
+    // Keep an easy walking rhythm. A duty cycle below 1 introduces short pauses.
+    const duty=Math.max(0.35,Math.min(1,Number(cfg.walkDutyCycle ?? 1)));
+    const phase=Date.now()%1000;
+    bot.setControlState('forward',phase<duty*1000);
+    bot.setControlState('sprint',false);
     bot.setControlState('jump',false);
   }
   function fight(){
@@ -53,7 +56,7 @@ function connect() {
     started=true;running=false;stopMovement();
     console.log('[BOT] Jestem w Minecraft! Czekam na /rodeolive start.');
     if(walkTimer)clearInterval(walkTimer);if(combatTimer)clearInterval(combatTimer);if(statusTimer)clearInterval(statusTimer);
-    walkTimer=setInterval(move,300);
+    walkTimer=setInterval(move,100);
     combatTimer=setInterval(fight,250);
     statusTimer=setInterval(status,1200);
     status();

@@ -1,6 +1,6 @@
 plugins { id 'java' }
 group = 'pl.rodeo'
-version = '1.1.0'
+version = '1.2.0'
 repositories { mavenCentral(); maven { url = 'https://repo.papermc.io/repository/maven-public/' } }
 dependencies { compileOnly 'io.papermc.paper:paper-api:1.20.6-R0.1-SNAPSHOT' }
 java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
