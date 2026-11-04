@@ -12,6 +12,8 @@ bot:
   regen-health: 2.0
   equipment-enabled: true
   sword-sharpness: 5
+  sweep-radius: 2.8
+  sweep-extra-targets: 4
 lane:
   enabled: true
   direction: EAST           # EAST, WEST, NORTH, SOUTH (tak samo w bot config)
@@ -19,20 +21,33 @@ lane:
   look-ahead: 18            # oczyszczanie PRZED botem
   clear-height: 5          # bloki usuwane od 1 do 5 nad poziomem drogi
   max-block-changes-per-tick: 160
+  recenter-bot: true       # powrot na os drogi po odrzuceniu przez eksplozje
+  max-deviation: 2.5      # tolerancja przed przywroceniem na droge
 mobs:
+  only-gift-mobs: true
+  remove-existing-mobs: true
+  creeper-terrain-protection: true
   max-live-mobs: 30
+  max-pending-mobs: 150
   lifetime-seconds: 90
   spawn-distance-ahead: 8
   events:
     rose: {type: ZOMBIE, count: 1}
     heart: {type: ZOMBIE, count: 3}
-    galaxy: {type: CREEPER, count: 5}
+    # Galaktyka: 1 Warden i 10 Zombie, 11 miejsc w limicie 30
+    galaxy:
+      description: "Galaxy -> 1 Warden + 10 Zombie"
+      mobs:
+        - {type: WARDEN, count: 1}
+        - {type: ZOMBIE, count: 10}
     follow: {type: CREEPER, count: 1}
     likes500: {type: ZOMBIE, count: 1}
     share: {type: SKELETON, count: 1, description: "Udostepnienie -> Szkielet"}
     # Piec DODATKOWYCH, dowolnie zmienialnych giftow:
-    fingerheart: {type: ZOMBIE, count: 2, description: "Finger Heart -> 2 Zombie"}
-    corgi: {type: CREEPER, count: 2, description: "Corgi -> 2 Creepery"}
+    # Bridge zbiera 5 prezentow Finger Heart jednego widza; dopiero wtedy wysyla fingerheart5.
+    fingerheart5: {type: CREEPER, count: 1, description: "5x Finger Heart -> 1 Creeper"}
+    corgi: {type: RAVAGER, count: 1, description: "Corgi -> 1 Ravager"}
+    hat100: {type: EVOKER, count: 1, description: "Czapka (100 monet) -> 1 Evoker"}
     perfume: {type: SKELETON, count: 3, description: "Perfume -> 3 Szkielety"}
     doughnut: {type: SPIDER, count: 4, description: "Doughnut -> 4 Pajaki"}
     lion: {type: ZOMBIE, count: 8, description: "Lion -> 8 Zombie"}

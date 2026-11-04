@@ -4,6 +4,8 @@ const WebSocket=require('ws');
 const cfg=JSON.parse(fs.readFileSync('./config.json','utf8'));
 if(!cfg.token || cfg.token.length<20 || cfg.token.startsWith('CHANGE_ME'))throw new Error('Ustaw taki sam, losowy token w pluginie, bridge oraz bocie.');
 const recent=new Map();let likeRemainder=0;
+const giftProgress=new Map(); // gift+user -> pozostale sztuki do kolejnego progu
+
 let sentSecond=0,sentThisSecond=0;
 function nick(d){return String(d.uniqueId||d.nickname||d.userId||'Widz').replace(/[|\r\n]/g,' ').slice(0,60)}
 function seen(id,ttl=300000){
@@ -38,8 +40,26 @@ function connect(){
       if(typeof match==='object')console.log('[GIFT]',d.giftName,'->',match.label||eventType,'| cena:',match.coinsLabel||'nie podano');
       const id=String(d.msgId||d.messageId||'');
       if(seen('gift:'+id))return;
-      // One named mob batch per final gift event; no repeatCount multiplier.
-      void send(eventType,user);
+      // Dla Finger Heart liczmy SZTUKI prezentow od konkretnego widza (a nie monety).
+      // Finalny event streaku niesie repeatCount; wczesniejsze update'y pomijamy.
+      // Limit czasu postepu zapobiega bezterminowemu kumulowaniu prezentow.
+      const perTrigger=typeof match==='object' ? Number(match.giftsPerTrigger||1) : 1;
+      if(Number.isInteger(perTrigger) && perTrigger>1 && perTrigger<=100){
+        const userKey=String(d.userId||d.uniqueId||user);
+        const stateKey=eventType+':'+userKey;
+        const now=Date.now();
+        const prior=giftProgress.get(stateKey);
+        const oldCount=prior && now-prior.at<24*60*60*1000 ? prior.count : 0;
+        // repeatCount is the FINAL streak total for repeatable gifts.
+        const units=d.giftType===1 ? Math.max(1,Math.min(1000,Math.floor(Number(d.repeatCount)||1))) : 1;
+        const total=oldCount+units;
+        const times=Math.floor(total/perTrigger);
+        giftProgress.set(stateKey,{count:total%perTrigger,at:now});
+        for(let i=0;i<Math.min(times,20);i++)void send(eventType,user);
+        console.log('[GIFT PROGRESS]',user,eventType,(total%perTrigger)+'/'+perTrigger);
+      }else{
+        void send(eventType,user);
+      }
     }else if(event==='follow'){
       // Follow notifications can repeat on reconnect; debounce user for 5 min.
       if(seen('follow:'+String(d.userId||d.uniqueId||user),300000))return;

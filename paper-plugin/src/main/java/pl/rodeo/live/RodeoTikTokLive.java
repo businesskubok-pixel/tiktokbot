@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Rodeo TikTok LIVE 1.2. All Bukkit world/entity operations occur on the primary thread. */
+/** Rodeo TikTok LIVE 1.2.8. All Bukkit world/entity operations occur on the primary thread. */
 public final class RodeoTikTokLive extends JavaPlugin implements Listener, CommandExecutor {
     private boolean running;
     private Location roundStart;
@@ -32,6 +32,11 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     private final Deque<Column> pending = new ArrayDeque<>();
     private final Set<Long> pendingKeys = new HashSet<>();
     private final Set<UUID> giftMobs = new HashSet<>();
+    private boolean creatingGiftMob = false;
+    private boolean dealingSweepDamage = false;
+    private final Deque<GiftOrder> giftQueue = new ArrayDeque<>();
+    private record GiftOrder(EntityType type, String event, String nick, int remaining) {}
+    private long lastLaneCorrection = 0;
     private final Map<UUID,GameMode> cameraModes = new HashMap<>();
     private record Column(int x, int z, int floorY) {}
 
@@ -41,13 +46,14 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         Objects.requireNonNull(getCommand("rodeolive")).setExecutor(this);
         running = getConfig().getBoolean("start-enabled", false);
         startBridge();
+        Bukkit.getScheduler().runTaskLater(this, this::removeOtherMobs, 30L);
         task = Bukkit.getScheduler().runTaskTimer(this, this::tick, 1L, 1L);
-        getLogger().info("RodeoTikTokLive 1.2. Komenda /rodeolive debug pokazuje swiat i nick bota.");
+        getLogger().info("RodeoTikTokLive 1.2.8. Komenda /rodeolive debug pokazuje swiat i nick bota.");
     }
     @Override public void onDisable() {
         if (task != null) task.cancel();
         if (server != null) server.stop(0);
-        pending.clear(); pendingKeys.clear(); giftMobs.clear(); cameraModes.clear();
+        pending.clear(); pendingKeys.clear(); giftMobs.clear(); giftQueue.clear(); cameraModes.clear();
     }
     private World liveWorld() { return Bukkit.getWorld(getConfig().getString("world", "world")); }
     private String botName() { return getConfig().getString("bot-name", "RodeoBot"); }
@@ -111,7 +117,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     }
     @EventHandler public void onDeath(PlayerDeathEvent e) {
         Player p=e.getEntity();if(!p.getName().equalsIgnoreCase(botName()))return;
-        deaths++;e.setKeepInventory(true);e.getDrops().clear();e.setDroppedExp(0);
+        deaths++;giftQueue.clear();e.setKeepInventory(true);e.getDrops().clear();e.setDroppedExp(0);
         Bukkit.broadcastMessage(ChatColor.GOLD+"[Rodeo LIVE] Bot zginal - runda "+(deaths+1)+" rozpocznie sie po respawnie.");
         clearPending();
     }
@@ -146,13 +152,64 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         viewer.sendMessage("Widok kamery zakonczony.");
     }
     @EventHandler public void onQuit(PlayerQuitEvent e){cameraModes.remove(e.getPlayer().getUniqueId());}
+
+    // Only mobs intentionally created by RodeoTikTokLive are allowed on the LIVE world.
+    // Do not cancel player spawns, spectator cameras, items or other non-creature events.
+    @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=false)
+    public void onCreatureSpawn(CreatureSpawnEvent e) {
+        if (!getConfig().getBoolean("mobs.only-gift-mobs", true)) return;
+        if (liveWorld()==null || !e.getLocation().getWorld().equals(liveWorld())) return;
+        if (!creatingGiftMob) e.setCancelled(true);
+    }
+
+    // Creepers still explode and may hurt/knock back the bot, but terrain is never damaged.
+    @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=false)
+    public void onCreeperExplosion(EntityExplodeEvent e) {
+        if (!(e.getEntity() instanceof Creeper) || liveWorld()==null || !e.getLocation().getWorld().equals(liveWorld())) return;
+        if (!getConfig().getBoolean("mobs.creeper-terrain-protection", true)) return;
+        e.blockList().clear();
+        e.setYield(0);
+    }
+
+    private void removeOtherMobs() {
+        if (!getConfig().getBoolean("mobs.only-gift-mobs", true) || !getConfig().getBoolean("mobs.remove-existing-mobs", true)) return;
+        World w=liveWorld();if(w==null)return;
+        for (Entity e : w.getEntities()) {
+            if (e instanceof Mob && !giftMobs.contains(e.getUniqueId())) e.remove();
+            // Animals are creatures too; remove them only on the dedicated LIVE world.
+            else if (e instanceof Animals && !giftMobs.contains(e.getUniqueId())) e.remove();
+        }
+    }
+
+    // Explosions and combat may push the bot outside of the fixed corridor.
+    // Bring it back to the centre line after a short grace period; preserve progress.
+    private void correctBotLane(Player p) {
+        if (roundStart==null || !getConfig().getBoolean("lane.recenter-bot", true)) return;
+        int dx=dirX(),dz=dirZ();if(dx==0 && dz==0)return;
+        double lateral=dx!=0 ? p.getLocation().getZ()-roundStart.getZ() : p.getLocation().getX()-roundStart.getX();
+        double maxDeviation=Math.max(1.5,getConfig().getDouble("lane.max-deviation", 2.5));
+        if (Math.abs(lateral)<maxDeviation || System.currentTimeMillis()-lastLaneCorrection<1200L) return;
+        // Recover only if the bot is already outside the path, to keep ordinary fights natural.
+        Location loc=p.getLocation().clone();
+        if (dx!=0) loc.setZ(roundStart.getZ()); else loc.setX(roundStart.getX());
+        loc.setY(roundStart.getBlockY());
+        int x=loc.getBlockX(),z=loc.getBlockZ();
+        if(!p.getWorld().isChunkLoaded(x>>4,z>>4)) return;
+        prepareColumn(p.getWorld(),new Column(x,z,roundStart.getBlockY()-1),32);
+        p.teleport(loc);
+        p.setVelocity(new org.bukkit.util.Vector(0,0,0));
+        lastLaneCorrection=System.currentTimeMillis();
+    }
     private void tick() {
+        // One check per second: fill freed slots with pending TikTok gift mobs.
+        if (Bukkit.getCurrentTick()%20==0 && running) drainGiftQueue();
         Player p=bot();if(!running||!valid(p)||p.isDead())return;
         if(p.getTicksLived()% (20*Math.max(1,getConfig().getInt("bot.regen-every-seconds",4)))==0){
             p.setHealth(Math.min(p.getMaxHealth(),p.getHealth()+getConfig().getDouble("bot.regen-health",2)));
             p.setFoodLevel(20);
         }
         if(!getConfig().getBoolean("lane.enabled",true) || roundStart==null)return;
+        correctBotLane(p);
         queueLaneAhead(p);
         int budget=Math.max(1,Math.min(500,getConfig().getInt("lane.max-block-changes-per-tick",160)));
         int changes=0;
@@ -202,19 +259,84 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         // Some trees / tall structures would remain above clear-height: intentional bounded clearing.
         return removed;
     }
+    // Attack only TikTok-created opponents; sweep deals reduced damage to other nearby gift mobs.
+    @EventHandler(priority=EventPriority.MONITOR, ignoreCancelled=true)
+    public void onBotAttack(EntityDamageByEntityEvent e) {
+        if (dealingSweepDamage || !(e.getDamager() instanceof Player p) || !valid(p) || !p.getName().equalsIgnoreCase(botName())) return;
+        if (!(e.getEntity() instanceof Mob primary) || !giftMobs.contains(primary.getUniqueId())) return;
+        double radius=Math.max(1,Math.min(4,getConfig().getDouble("bot.sweep-radius",2.8)));
+        int extra=Math.max(0,Math.min(8,getConfig().getInt("bot.sweep-extra-targets",4)));
+        if(extra==0)return;
+        dealingSweepDamage=true;
+        try {
+            int hit=0;
+            for(Entity other:primary.getNearbyEntities(radius,radius,radius)) {
+                if(hit>=extra)break;
+                if(!(other instanceof Mob mob) || mob.isDead() || !giftMobs.contains(mob.getUniqueId()))continue;
+                if(!mob.getWorld().equals(primary.getWorld()) || mob.getLocation().distanceSquared(p.getLocation())>16)continue;
+                mob.damage(Math.max(1,e.getFinalDamage()*0.55),p);
+                hit++;
+            }
+        } finally {dealingSweepDamage=false;}
+    }
+
+    /** Each gift can map to one mob type OR to a mixed wave (e.g. Warden + Zombies). */
+    private int queueGift(String event,String nick) {
+        if(!running || !valid(bot()))return 0;
+        String key="mobs.events."+event.toLowerCase(Locale.ROOT)+".";
+        List<GiftOrder> orders=new ArrayList<>();
+        List<Map<?,?>> wave=new ArrayList<>(getConfig().getMapList(key+"mobs"));
+        if(!wave.isEmpty()) {
+            for(Map<?,?> entry:wave) {
+                try {
+                    EntityType type=EntityType.valueOf(String.valueOf(entry.get("type")).toUpperCase(Locale.ROOT));
+                    int count=Integer.parseInt(String.valueOf(entry.get("count")));
+                    if(!type.isAlive() || !type.isSpawnable() || count<1 || count>30)throw new IllegalArgumentException("invalid mob/count");
+                    orders.add(new GiftOrder(type,event,nick,count));
+                }catch(Exception ex){getLogger().warning("Niepoprawna fala dla "+event+": "+ex.getMessage());return 0;}
+            }
+        } else {
+            try {
+                EntityType type=EntityType.valueOf(getConfig().getString(key+"type","").toUpperCase(Locale.ROOT));
+                if(!type.isAlive()||!type.isSpawnable())return 0;
+                int count=Math.max(1,Math.min(30,getConfig().getInt(key+"count",1)));
+                orders.add(new GiftOrder(type,event,nick,count));
+            }catch(Exception ex){getLogger().warning("Nieznane zdarzenie/mob: "+event);return 0;}
+        }
+        int total=orders.stream().mapToInt(GiftOrder::remaining).sum();
+        int queueLimit=Math.max(30,Math.min(1000,getConfig().getInt("mobs.max-pending-mobs",150)));
+        int pendingTotal=giftQueue.stream().mapToInt(GiftOrder::remaining).sum();
+        // Do not enqueue half a purchased wave: accept all 11 or reject it as a whole.
+        if(total>queueLimit-pendingTotal){getLogger().warning("Pelna kolejka mobow: odrzucono event "+event);return 0;}
+        giftQueue.addAll(orders);
+        drainGiftQueue();
+        return total;
+    }
+
+    private void drainGiftQueue() {
+        if(!running||!valid(bot()))return;
+        giftMobs.removeIf(id->{Entity entity=Bukkit.getEntity(id);return entity==null||entity.isDead();});
+        int limit=Math.max(1,Math.min(100,getConfig().getInt("mobs.max-live-mobs",30)));
+        int attempts=0;
+        while(!giftQueue.isEmpty()&&giftMobs.size()<limit&&attempts++<10) {
+            GiftOrder order=giftQueue.removeFirst();
+            // Do not exceed capacity; spawnGift itself also checks the live mob cap.
+            int spawned=spawnGift(order);
+            if(spawned==0){giftQueue.addFirst(order);break;}
+            int left=order.remaining()-spawned;
+            if(left>0)giftQueue.addFirst(new GiftOrder(order.type(),order.event(),order.nick(),left));
+        }
+    }
+
     /** Spawn gift mobs onto a safe short platform ahead of the bot; return actual count. */
-    private int spawnGift(String event,String username) {
+    private int spawnGift(GiftOrder order) {
         Player p=bot();
         if(!running||!valid(p)||p.isDead())return 0;
-        String key="mobs.events."+event.toLowerCase(Locale.ROOT)+".";
-        String raw=getConfig().getString(key+"type","");
-        EntityType type;
-        try {type=EntityType.valueOf(raw.toUpperCase(Locale.ROOT));}
-        catch(Exception ex){getLogger().warning("Nieznane zdarzenie/mob: "+event);return 0;}
-        if(!type.isAlive()||!type.isSpawnable())return 0;
+        String event=order.event(),username=order.nick();
+        EntityType type=order.type();
         giftMobs.removeIf(id->Bukkit.getEntity(id)==null);
         int limit=Math.max(1,getConfig().getInt("mobs.max-live-mobs",30));
-        int count=Math.max(1,Math.min(10,getConfig().getInt(key+"count",1)));
+        int count=1; // Spawn 1 per available slot to guarantee cap and fair scheduling.
         String nick=username.replaceAll("[\\p{Cntrl}§]", "").trim();
         if(nick.isEmpty())nick="Widz";
         if(nick.length()>22)nick=nick.substring(0,22);
@@ -243,8 +365,12 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             }
             Location loc=new Location(w,x+0.5,floorY+1,z+0.5);
             Entity mob;
-            try {mob=w.spawnEntity(loc,type);}
-            catch(Exception ex){getLogger().warning("Nie mozna przywolac "+type+": "+ex.getMessage());continue;}
+            try {
+                creatingGiftMob=true;
+                mob=w.spawnEntity(loc,type);
+            } catch(Exception ex){
+                getLogger().warning("Nie mozna przywolac "+type+": "+ex.getMessage());continue;
+            } finally {creatingGiftMob=false;}
             mob.setCustomName(ChatColor.YELLOW+nick+ChatColor.RED+" | "+event);
             mob.setCustomNameVisible(true);
             if(mob instanceof Mob attacker)attacker.setTarget(p);
@@ -283,13 +409,19 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
                 byte[] body=ex.getRequestBody().readNBytes(256);
                 String[] parts=new String(body,StandardCharsets.UTF_8).trim().split("\\|",2);
                 if(parts.length!=2||!parts[0].matches("[a-zA-Z_]{1,32}")||parts[1].isBlank()||parts[1].length()>90){send(ex,400,"{\"error\":\"invalid payload\"}");return;}
-                Bukkit.getScheduler().runTask(this,()->spawnGift(parts[0],parts[1]));
+                Bukkit.getScheduler().runTask(this,()->queueGift(parts[0],parts[1]));
                 send(ex,202,"{\"queued\":true}");
             });
             server.setExecutor(Executors.newCachedThreadPool(r->{Thread t=new Thread(r,"RodeoBridge");t.setDaemon(true);return t;}));
             server.start();getLogger().info("Bridge nasluchuje: "+bind+":"+server.getAddress().getPort());
         }catch(IOException e){getLogger().warning("Bridge nie wystartowal: "+e.getMessage());}
     }
+    private String describeGift(String key) {
+        List<Map<?,?>> wave=new ArrayList<>(getConfig().getMapList(key+"mobs"));
+        if(!wave.isEmpty())return String.join(" + ",wave.stream().map(e -> String.valueOf(e.get("count"))+"x "+String.valueOf(e.get("type"))).toList());
+        return getConfig().getInt(key+"count",1)+"x "+getConfig().getString(key+"type","?");
+    }
+
     @Override public boolean onCommand(CommandSender sender,Command cmd,String label,String[] args) {
         if(!sender.hasPermission("rodeolive.admin"))return true;
         if(args.length==0){sender.sendMessage("/rodeolive start | stop | reset | camera | uncamera | gifts | test <event> <nick> | stats | debug | reload");return true;}
@@ -303,20 +435,22 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
                     if(!valid(p)){sender.sendMessage(ChatColor.RED+"Bot jest w "+p.getWorld().getName()+", oczekiwany: "+world.getName());break;}
                 }
                 running=true;
+                giftQueue.clear();
+                removeOtherMobs();
                 // Save fixed start near spawn; this is also the elevation of the flattened corridor.
                 roundStart=p.getLocation().clone();
                 clearPending();strengthen(p);
                 sender.sendMessage(ChatColor.GREEN+"LIVE start! Bot: "+p.getName()+", swiat: "+p.getWorld().getName()+", kierunek "+getConfig().getString("lane.direction","EAST"));
             }
-            case "stop" -> {running=false;clearPending();sender.sendMessage("LIVE zatrzymany.");}
+            case "stop" -> {running=false;giftQueue.clear();clearPending();sender.sendMessage("LIVE zatrzymany.");}
             case "reset" -> {
                 Player p=bot();if(!valid(p)||roundStart==null){sender.sendMessage("Najpierw uruchom LIVE.");break;}
                 p.teleport(roundStart.clone());clearPending();sender.sendMessage("Bot cofniety do startu. Runda od nowa.");
             }
             case "test" -> {
                 if(args.length<3){sender.sendMessage("/rodeolive test rose Nick");break;}
-                int n=spawnGift(args[1],String.join(" ",Arrays.copyOfRange(args,2,args.length)));
-                sender.sendMessage("Test "+args[1]+": przywolano "+n+" mobow. Sprawdz /rodeolive stats.");
+                int n=queueGift(args[1],String.join(" ",Arrays.copyOfRange(args,2,args.length)));
+                sender.sendMessage("Test "+args[1]+": przyjeto "+n+" mobow (aktywnych max 30, nadmiar w kolejce). Sprawdz /rodeolive stats.");
                 if(n==0) sender.sendMessage("Sprawdz LIVE start, limit mobow oraz nazwe zdarzenia w config.yml.");
             }
             case "camera" -> {
@@ -333,10 +467,10 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
                 sender.sendMessage(ChatColor.GOLD+"Zdarzenia LIVE (opis/cena to etykiety, nie oficjalne ceny TikTok):");
                 for(String id:section.getKeys(false)) {
                     String key="mobs.events."+id+".";
-                    sender.sendMessage(ChatColor.YELLOW+id+ChatColor.WHITE+" -> "+getConfig().getString(key+"type","?")+" x"+getConfig().getInt(key+"count",1)+" | "+getConfig().getString(key+"description",id));
+                    sender.sendMessage(ChatColor.YELLOW+id+ChatColor.WHITE+" -> "+describeGift(key)+" | "+getConfig().getString(key+"description",id));
                 }
             }
-            case "stats" -> sender.sendMessage("LIVE="+running+", bot="+(valid(bot())?"online":"offline/wrong-world")+", deaths="+deaths+", mobs="+giftMobs.size()+", lane queue="+pending.size());
+            case "stats" -> sender.sendMessage("LIVE="+running+", bot="+(valid(bot())?"online":"offline/wrong-world")+", deaths="+deaths+", mobs="+giftMobs.size()+", gift queue="+giftQueue.stream().mapToInt(GiftOrder::remaining).sum()+", lane queue="+pending.size());
             case "debug" -> {
                 Player p=bot();sender.sendMessage("Bot szukany: '"+botName()+"', wynik: "+(p==null?"BRAK":p.getName()+" / swiat="+p.getWorld().getName()));
                 sender.sendMessage("Swiat z configu: '"+getConfig().getString("world", "world")+"', istnieje="+(liveWorld()!=null));

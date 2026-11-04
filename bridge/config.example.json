@@ -5,7 +5,71 @@
   "giftNames": {
     "Rose": "rose",
     "Heart": "heart",
-    "Galaxy": "galaxy"
+    "Galaxy": {
+      "event": "galaxy",
+      "label": "1 Warden + 10 Zombie",
+      "coinsLabel": "Sprawdz cene w TikFinity"
+    },
+    "Finger Heart": {
+      "event": "fingerheart5",
+      "label": "5 sztuk = 1 Creeper",
+      "coinsLabel": "Sprawdz cene w TikFinity",
+      "giftsPerTrigger": 5
+    },
+    "Corgi": {
+      "event": "corgi",
+      "label": "1 Ravager",
+      "coinsLabel": "Sprawdz cene w TikFinity"
+    },
+    "Perfume": {
+      "event": "perfume",
+      "label": "3 Szkielety",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Doughnut": {
+      "event": "doughnut",
+      "label": "4 Pajaki",
+      "coinsLabel": "Wpisz cene z TikFinity"
+    },
+    "Lion": {
+      "event": "lion",
+      "label": "8 Zombie",
+      "coinsLabel": "Sprawdz cene w TikFinity"
+    },
+    "Róża": "rose",
+    "Roza": "rose",
+    "Galaktyka": {
+      "event": "galaxy",
+      "label": "1 Warden + 10 Zombie",
+      "coinsLabel": "Sprawdz cene w TikFinity"
+    },
+    "Serce z palców": {
+      "event": "fingerheart5",
+      "label": "5 sztuk = 1 Creeper",
+      "coinsLabel": "Sprawdz cene w TikFinity",
+      "giftsPerTrigger": 5
+    },
+    "Serce z palcow": {
+      "event": "fingerheart5",
+      "label": "5 sztuk = 1 Creeper",
+      "coinsLabel": "Sprawdz cene w TikFinity",
+      "giftsPerTrigger": 5
+    },
+    "Hat": {
+      "event": "hat100",
+      "label": "1 Evoker",
+      "coinsLabel": "100 monet (wg ustalenia)"
+    },
+    "Cap": {
+      "event": "hat100",
+      "label": "1 Evoker",
+      "coinsLabel": "100 monet (wg ustalenia)"
+    },
+    "Czapka": {
+      "event": "hat100",
+      "label": "1 Evoker",
+      "coinsLabel": "100 monet (wg ustalenia)"
+    }
   },
   "likesPerZombie": 500,
   "maxEventsPerSecond": 10
