@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Rodeo TikTok LIVE 1.2.9. All Bukkit world/entity operations occur on the primary thread. */
+/** Rodeo TikTok LIVE 1.3.1. All Bukkit world/entity operations occur on the primary thread. */
 public final class RodeoTikTokLive extends JavaPlugin implements Listener, CommandExecutor {
     private boolean running;
     private Location roundStart;
@@ -39,9 +39,13 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
     private long lastLaneCorrection = 0;
     // Prefetch only a small number of chunks along the lane; never generate chunks synchronously every tick.
     private final Set<Long> prefetchingChunks = new HashSet<>();
+    // Short rolling window of plugin tickets: keep corridor chunks available to
+    // both the bot and the moving spectator, without retaining the whole world.
+    private final Set<Long> pinnedChunks = new HashSet<>();
     private int lastPrefetchChunkX = Integer.MIN_VALUE;
     private int lastPrefetchChunkZ = Integer.MIN_VALUE;
-    private final Map<UUID,GameMode> cameraModes = new HashMap<>();
+    private final Map<UUID, CameraSession> cameras = new HashMap<>();
+    private record CameraSession(GameMode previousMode, Location previousLocation) {}
     private record Column(int x, int z, int floorY) {}
 
     @Override public void onEnable() {
@@ -52,12 +56,18 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         startBridge();
         Bukkit.getScheduler().runTaskLater(this, this::removeOtherMobs, 30L);
         task = Bukkit.getScheduler().runTaskTimer(this, this::tick, 1L, 1L);
-        getLogger().info("RodeoTikTokLive 1.2.9. Komenda /rodeolive debug pokazuje swiat i nick bota.");
+        getLogger().info("RodeoTikTokLive 1.3.1. Komenda /rodeolive debug pokazuje swiat i nick bota.");
     }
     @Override public void onDisable() {
         if (task != null) task.cancel();
+        for (UUID id : new ArrayList<>(cameras.keySet())) {
+            Player viewer = Bukkit.getPlayer(id);
+            if (viewer != null && viewer.isOnline()) stopCamera(viewer, false);
+            else cameras.remove(id);
+        }
         if (server != null) server.stop(0);
-        pending.clear(); pendingKeys.clear(); prefetchingChunks.clear(); giftMobs.clear(); giftQueue.clear(); cameraModes.clear();
+        releaseChunkTickets();
+        pending.clear(); pendingKeys.clear(); prefetchingChunks.clear(); giftMobs.clear(); giftQueue.clear();
     }
     private World liveWorld() { return Bukkit.getWorld(getConfig().getString("world", "world")); }
     private String botName() { return getConfig().getString("bot-name", "RodeoBot"); }
@@ -134,28 +144,71 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
             clearPending();
         },5L);
     }
-    // Obserwator moze widziec kamere bota; zwykly spectator nie renderuje jego dloni/miecza.
+    // Third-person follow camera: teleport the ACTUAL spectator player instead of
+    // attaching its viewpoint to a moving ArmorStand. The server then streams
+    // chunks around the viewer's real position as the bot advances.
+    // The bot remains a normal Mineflayer player; the camera is a separate viewer.
+    private Location cameraLocation(Player target) {
+        Location botPos = target.getLocation();
+        int dx = dirX(), dz = dirZ();
+        if (dx == 0 && dz == 0) { dx = 1; dz = 0; }
+        double distance = Math.max(2.5, Math.min(9.0, getConfig().getDouble("camera.distance", 5.5)));
+        double height = Math.max(0.8, Math.min(5.0, getConfig().getDouble("camera.height", 2.4)));
+        Location view = botPos.clone().add(-dx * distance, height, -dz * distance);
+        org.bukkit.util.Vector lookAt = botPos.clone().add(0, 1.1, 0).toVector();
+        org.bukkit.util.Vector dir = lookAt.subtract(view.toVector());
+        if (dir.lengthSquared() > 0.001) view.setDirection(dir);
+        return view;
+    }
     private void camera(Player viewer) {
-        Player target=bot();
-        if(!valid(target)){viewer.sendMessage(ChatColor.RED+"RodeoBot nie jest online w swiecie LIVE.");return;}
-        if(viewer.equals(target)){viewer.sendMessage("Nie mozna obserwowac samego siebie.");return;}
-        cameraModes.putIfAbsent(viewer.getUniqueId(),viewer.getGameMode());
+        Player target = bot();
+        if (!valid(target)) { viewer.sendMessage(ChatColor.RED + "RodeoBot nie jest online w swiecie LIVE."); return; }
+        if (viewer.equals(target)) { viewer.sendMessage(ChatColor.RED + "Nie mozna obserwowac samego siebie."); return; }
+        if (cameras.containsKey(viewer.getUniqueId())) { viewer.sendMessage(ChatColor.YELLOW + "Kamera juz dziala. /rodeolive uncamera aby wrocic."); return; }
+        CameraSession session = new CameraSession(viewer.getGameMode(), viewer.getLocation().clone());
+        cameras.put(viewer.getUniqueId(), session);
         viewer.setGameMode(GameMode.SPECTATOR);
-        viewer.teleport(target.getLocation());
-        Bukkit.getScheduler().runTaskLater(this,()->{
-            if(viewer.isOnline()&&valid(target)&&viewer.getGameMode()==GameMode.SPECTATOR){
-                viewer.setSpectatorTarget(target);
-                viewer.sendMessage(ChatColor.GREEN+"Kamera bota aktywna. /rodeolive uncamera przywraca widok.");
+        // Do not call setSpectatorTarget: it can leave the viewer's server-side
+        // chunk subscription at its old position, causing the sky/void bug.
+        viewer.teleport(cameraLocation(target));
+        viewer.sendMessage(ChatColor.GREEN + "Kamera zza bota aktywna! /rodeolive uncamera - powrot.");
+    }
+    private void updateCameras() {
+        if (cameras.isEmpty()) return;
+        Player target = bot();
+        if (!valid(target)) {
+            for (UUID id : new ArrayList<>(cameras.keySet())) {
+                Player viewer = Bukkit.getPlayer(id);
+                if (viewer != null && viewer.isOnline()) stopCamera(viewer, true);
+                else cameras.remove(id);
             }
-        },2L);
+            return;
+        }
+        // Every two ticks keeps the view close to the bot without commanding
+        // unnecessary network teleports on each server tick.
+        if (Bukkit.getCurrentTick() % 2 != 0) return;
+        Location desired = cameraLocation(target);
+        // Never teleport into an unloaded chunk. The bot's chunk will normally
+        // be loaded, but on a cross-chunk transition skip until it is ready.
+        if (!desired.getWorld().isChunkLoaded(desired.getBlockX() >> 4, desired.getBlockZ() >> 4)) return;
+        for (UUID id : new ArrayList<>(cameras.keySet())) {
+            Player viewer = Bukkit.getPlayer(id);
+            if (viewer == null || !viewer.isOnline()) { cameras.remove(id); continue; }
+            if (viewer.getGameMode() != GameMode.SPECTATOR) { stopCamera(viewer, false); continue; }
+            // Moving the real spectator means chunks are streamed relative to the
+            // current camera location rather than a stationary spectator body.
+            viewer.teleport(desired);
+        }
     }
-    private void uncamera(Player viewer) {
-        if(viewer.getGameMode()==GameMode.SPECTATOR) viewer.setSpectatorTarget(null);
-        GameMode previous=cameraModes.remove(viewer.getUniqueId());
-        if(previous!=null)viewer.setGameMode(previous);
-        viewer.sendMessage("Widok kamery zakonczony.");
+    private void stopCamera(Player viewer, boolean notify) {
+        CameraSession session = cameras.remove(viewer.getUniqueId());
+        if (session == null) { if(notify) viewer.sendMessage("Kamera nie jest aktywna."); return; }
+        viewer.setGameMode(session.previousMode());
+        if (session.previousLocation().getWorld() != null) viewer.teleport(session.previousLocation());
+        if (notify) viewer.sendMessage(ChatColor.GREEN + "Widok kamery zakonczony. Wrociles do swojej postaci.");
     }
-    @EventHandler public void onQuit(PlayerQuitEvent e){cameraModes.remove(e.getPlayer().getUniqueId());}
+    private void uncamera(Player viewer) { stopCamera(viewer, true); }
+    @EventHandler public void onQuit(PlayerQuitEvent e) { cameras.remove(e.getPlayer().getUniqueId()); }
 
     // Only mobs intentionally created by RodeoTikTokLive are allowed on the LIVE world.
     // Do not cancel player spawns, spectator cameras, items or other non-creature events.
@@ -205,6 +258,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         lastLaneCorrection=System.currentTimeMillis();
     }
     private void tick() {
+        updateCameras();
         // One check per second: fill freed slots with pending TikTok gift mobs.
         if (Bukkit.getCurrentTick()%20==0 && running) drainGiftQueue();
         Player p=bot();if(!running||!valid(p)||p.isDead())return;
@@ -225,24 +279,55 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         }
         // Keep pace controlled to avoid queues growing without bound.
     }
-    // Paper 1.20.6 loads/generates chunks asynchronously. The bot's corridor is prepared
-    // after loading; ungenerated terrain will not silently block the lane forever.
+    private void releaseChunkTickets() {
+        World w = liveWorld();
+        if (w != null) for (long key : new HashSet<>(pinnedChunks))
+            w.removePluginChunkTicket((int)(key >> 32), (int)key, this);
+        pinnedChunks.clear();
+    }
+    // Maintain a small sliding window of chunk tickets around and ahead of the
+    // bot. Loaded chunks aren't immediately released when the bot approaches a
+    // new region, so the camera and lane editor can catch up without sky/void.
     private void prefetchLane(Player p) {
-        World w=p.getWorld(); int dx=dirX(),dz=dirZ(); if(dx==0&&dz==0)return;
-        int distance=Math.max(24,Math.min(96,getConfig().getInt("lane.chunk-prefetch-blocks",56)));
-        int originX=p.getLocation().getBlockX(),originZ=p.getLocation().getBlockZ();
-        // At most two outstanding requests per second, and never more than four in flight.
-        int requested=0;
-        for(int ahead=16;ahead<=distance;ahead+=16){
-            if(requested>=2||prefetchingChunks.size()>=4)break;
-            int cx=(originX+ahead*dx)>>4,cz=(originZ+ahead*dz)>>4;
-            if(w.isChunkLoaded(cx,cz))continue;
-            long key=colKey(cx,cz);
-            if(!prefetchingChunks.add(key))continue;
+        World w = p.getWorld(); int dx = dirX(), dz = dirZ();
+        if (dx == 0 && dz == 0) return;
+        int distance = Math.max(32, Math.min(96, getConfig().getInt("lane.chunk-prefetch-blocks", 56)));
+        int x = p.getLocation().getBlockX(), z = p.getLocation().getBlockZ();
+        Set<Long> wanted = new LinkedHashSet<>();
+        // Include camera behind the bot and every chunk ahead along the path.
+        for (int offset = -16; offset <= distance; offset += 8) {
+            int cx = (x + offset * dx) >> 4, cz = (z + offset * dz) >> 4;
+            wanted.add(colKey(cx, cz));
+        }
+        for (long key : new HashSet<>(pinnedChunks)) {
+            if (!wanted.contains(key)) {
+                w.removePluginChunkTicket((int)(key >> 32), (int)key, this);
+                pinnedChunks.remove(key);
+            }
+        }
+        int requested = 0;
+        for (long key : wanted) {
+            if (pinnedChunks.contains(key) || prefetchingChunks.contains(key)) continue;
+            int cx = (int)(key >> 32), cz = (int)key;
+            if (w.isChunkLoaded(cx, cz)) {
+                if (w.addPluginChunkTicket(cx, cz, this)) pinnedChunks.add(key);
+                continue;
+            }
+            if (requested >= 2 || prefetchingChunks.size() >= 4) break;
+            prefetchingChunks.add(key);
             requested++;
-            w.getChunkAtAsync(cx,cz,true).whenComplete((chunk,err)->{
-                prefetchingChunks.remove(key);
-                if(err!=null)getLogger().warning("Nie udalo sie wczytac chunka LIVE " + cx + "," + cz + ": " + err.getMessage());
+            w.getChunkAtAsync(cx, cz, true).whenComplete((chunk, error) -> {
+                // Paper's future callback is not guaranteed to be on the main thread.
+                if (!isEnabled()) return;
+                Bukkit.getScheduler().runTask(this, () -> {
+                    prefetchingChunks.remove(key);
+                    if (error != null) {
+                        getLogger().warning("Chunk LIVE " + cx + "," + cz + ": " + error.getMessage());
+                    } else if (w.isChunkLoaded(cx, cz) && !pinnedChunks.contains(key)) {
+                        // Ticket will be dropped if it is no longer needed on next pass.
+                        if (w.addPluginChunkTicket(cx, cz, this)) pinnedChunks.add(key);
+                    }
+                });
             });
         }
     }
