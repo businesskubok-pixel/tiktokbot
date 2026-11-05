@@ -53,8 +53,8 @@ mobs:
     likes500: {type: ZOMBIE, count: 1}
     share: {type: SKELETON, count: 1, description: "Udostepnienie -> Szkielet"}
     # Piec DODATKOWYCH, dowolnie zmienialnych giftow:
-    # Bridge zbiera 5 prezentow Finger Heart jednego widza; dopiero wtedy wysyla fingerheart5.
-    fingerheart5: {type: CREEPER, count: 1, description: "5x Finger Heart -> 1 Creeper"}
+    # Kazdy Finger Heart wysyla fingerheart5 i przywoluje 1 Creepera.
+    fingerheart5: {type: CREEPER, count: 1, description: "1 Finger Heart -> 1 Creeper"}
     corgi: {type: RAVAGER, count: 1, description: "Corgi -> 1 Ravager"}
     hat100: {type: EVOKER, count: 1, description: "Czapka (100 monet) -> 1 Evoker"}
     perfume: {type: SKELETON, count: 3, description: "Perfume -> 3 Szkielety"}

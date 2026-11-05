@@ -573,7 +573,7 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
                 if(!ex.getRequestMethod().equals("POST")||!token.equals(ex.getRequestHeaders().getFirst("X-Rodeo-Token"))){send(ex,403,"{\"error\":\"forbidden\"}");return;}
                 byte[] body=ex.getRequestBody().readNBytes(256);
                 String[] parts=new String(body,StandardCharsets.UTF_8).trim().split("\\|",2);
-                if(parts.length!=2||!parts[0].matches("[a-zA-Z_]{1,32}")||parts[1].isBlank()||parts[1].length()>90){send(ex,400,"{\"error\":\"invalid payload\"}");return;}
+                if(parts.length!=2||!parts[0].matches("[a-zA-Z0-9_]{1,32}")||parts[1].isBlank()||parts[1].length()>90){send(ex,400,"{\"error\":\"invalid payload\"}");return;}
                 Bukkit.getScheduler().runTask(this,()->queueGift(parts[0],parts[1]));
                 send(ex,202,"{\"queued\":true}");
             });
