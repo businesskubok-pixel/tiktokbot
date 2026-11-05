@@ -100,8 +100,14 @@ public final class RodeoTikTokLive extends JavaPlugin implements Listener, Comma
         ItemStack chest = new ItemStack(Material.NETHERITE_CHESTPLATE);
         ItemStack legs = new ItemStack(Material.NETHERITE_LEGGINGS);
         ItemStack boots = new ItemStack(Material.NETHERITE_BOOTS);
+        // Netherite armor stays the same. Adjust Protection with config.yml.
+        // 0 = no Protection, 2 = balanced, 4 = original full protection.
+        int protectionLevel = Math.max(0, Math.min(4,
+                getConfig().getInt("bot.armor-protection-level", 2)));
         for (ItemStack armor : List.of(helmet,chest,legs,boots)) {
-            armor.addUnsafeEnchantment(Enchantment.PROTECTION, 4);
+            if (protectionLevel > 0) {
+                armor.addUnsafeEnchantment(Enchantment.PROTECTION, protectionLevel);
+            }
             armor.addUnsafeEnchantment(Enchantment.UNBREAKING, 3);
         }
         ItemStack sword = new ItemStack(Material.NETHERITE_SWORD);

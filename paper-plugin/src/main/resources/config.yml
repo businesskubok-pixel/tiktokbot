@@ -11,6 +11,7 @@ bot:
   regen-every-seconds: 4
   regen-health: 2.0
   equipment-enabled: true
+  armor-protection-level: 2  # 0-4, domyslnie II zamiast IV; zbroja pozostaje netherytowa
   sword-sharpness: 5
   sweep-radius: 2.8
   sweep-extra-targets: 4
